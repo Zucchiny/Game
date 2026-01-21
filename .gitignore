@@ -21,3 +21,7 @@ Thumbs.db
 # Database
 *.db
 *.sqlite
+
+# Docker Volumes (данные базы данных)
+postgres_data/
+postgres_redash_data/
