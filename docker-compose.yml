@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  # База данных PostgreSQL
+  # База данных PostgreSQL для игровых данных
   postgres:
     image: postgres:15
     container_name: game_stats_db
@@ -16,6 +14,24 @@ services:
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gameuser -d game_stats"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - game_network
+
+  # Отдельная база данных PostgreSQL для Redash
+  postgres_redash:
+    image: postgres:15
+    container_name: redash_postgres
+    environment:
+      POSTGRES_USER: redash
+      POSTGRES_PASSWORD: redash123
+      POSTGRES_DB: redash
+    volumes:
+      - postgres_redash_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redash -d redash"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -52,16 +68,19 @@ services:
     image: redash/redash:10.1.0.b50633
     container_name: redash_server
     depends_on:
-      - postgres
-      - redis
+      postgres_redash:
+        condition: service_healthy
+      redis:
+        condition: service_started
     ports:
       - "5000:5000"
     environment:
       REDASH_WEB_WORKERS: 2
-      REDASH_DATABASE_URL: "postgresql://gameuser:gamepass123@postgres/game_stats"
+      REDASH_DATABASE_URL: "postgresql://redash:redash123@postgres_redash/redash"
       REDASH_REDIS_URL: "redis://redis:6379/0"
       REDASH_SECRET_KEY: "redash_secret_key_change_me"
       REDASH_COOKIE_SECRET: "redash_cookie_secret_change_me"
+      PYTHONUNBUFFERED: "0"
     command: server
     restart: unless-stopped
     networks:
@@ -74,8 +93,10 @@ services:
     depends_on:
       - redash-server
     environment:
-      REDASH_DATABASE_URL: "postgresql://gameuser:gamepass123@postgres/game_stats"
+      REDASH_DATABASE_URL: "postgresql://redash:redash123@postgres_redash/redash"
       REDASH_REDIS_URL: "redis://redis:6379/0"
+      REDASH_SECRET_KEY: "redash_secret_key_change_me"
+      REDASH_COOKIE_SECRET: "redash_cookie_secret_change_me"
     command: scheduler
     restart: unless-stopped
     networks:
@@ -88,8 +109,10 @@ services:
     depends_on:
       - redash-server
     environment:
-      REDASH_DATABASE_URL: "postgresql://gameuser:gamepass123@postgres/game_stats"
+      REDASH_DATABASE_URL: "postgresql://redash:redash123@postgres_redash/redash"
       REDASH_REDIS_URL: "redis://redis:6379/0"
+      REDASH_SECRET_KEY: "redash_secret_key_change_me"
+      REDASH_COOKIE_SECRET: "redash_cookie_secret_change_me"
       QUEUES: "queries,scheduled_queries,celery"
     command: worker
     restart: unless-stopped
@@ -98,6 +121,7 @@ services:
 
 volumes:
   postgres_data:
+  postgres_redash_data:
 
 networks:
   game_network:
