@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # База данных PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: game_stats_db
+    environment:
+      POSTGRES_USER: gameuser
+      POSTGRES_PASSWORD: gamepass123
+      POSTGRES_DB: game_stats
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gameuser -d game_stats"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - game_network
+
+  # Генератор игровых событий
+  generator:
+    build: ./generator
+    container_name: game_event_generator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: game_stats
+      DB_USER: gameuser
+      DB_PASSWORD: gamepass123
+    restart: unless-stopped
+    networks:
+      - game_network
+
+  # Redis для Redash
+  redis:
+    image: redis:7-alpine
+    container_name: redash_redis
+    restart: unless-stopped
+    networks:
+      - game_network
+
+  # Redash - сервер приложения
+  redash-server:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_server
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "5000:5000"
+    environment:
+      REDASH_WEB_WORKERS: 2
+      REDASH_DATABASE_URL: "postgresql://gameuser:gamepass123@postgres/game_stats"
+      REDASH_REDIS_URL: "redis://redis:6379/0"
+      REDASH_SECRET_KEY: "redash_secret_key_change_me"
+      REDASH_COOKIE_SECRET: "redash_cookie_secret_change_me"
+    command: server
+    restart: unless-stopped
+    networks:
+      - game_network
+
+  # Redash - планировщик задач
+  redash-scheduler:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_scheduler
+    depends_on:
+      - redash-server
+    environment:
+      REDASH_DATABASE_URL: "postgresql://gameuser:gamepass123@postgres/game_stats"
+      REDASH_REDIS_URL: "redis://redis:6379/0"
+    command: scheduler
+    restart: unless-stopped
+    networks:
+      - game_network
+
+  # Redash - воркеры для выполнения запросов
+  redash-worker:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_worker
+    depends_on:
+      - redash-server
+    environment:
+      REDASH_DATABASE_URL: "postgresql://gameuser:gamepass123@postgres/game_stats"
+      REDASH_REDIS_URL: "redis://redis:6379/0"
+      QUEUES: "queries,scheduled_queries,celery"
+    command: worker
+    restart: unless-stopped
+    networks:
+      - game_network
+
+volumes:
+  postgres_data:
+
+networks:
+  game_network:
+    driver: bridge
